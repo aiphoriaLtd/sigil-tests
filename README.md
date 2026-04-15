@@ -28,9 +28,17 @@ Sigil uses **HTTP Basic Auth** to authenticate generation exports. You need two 
 
 **How auth works in the SDK:**
 
-The Sigil SDK sends generation data to the ingest endpoint using HTTP Basic Auth where:
-- **Username** = the instance/tenant ID (`GRAFANA_INSTANCE_ID`)
-- **Password** = the API token (`GLC_TOKEN`)
+In `basic` mode, the SDK's `AuthConfig` takes two key parameters:
+- **`tenant_id`** — your Grafana Cloud instance ID. The SDK uses this in two ways: as the user component of the HTTP Basic Auth `Authorization` header, and as the `X-Scope-OrgID` header for multi-tenant routing.
+- **`basic_password`** — your Grafana Cloud API token (`GLC_TOKEN`).
+
+```python
+auth=AuthConfig(
+    mode="basic",
+    tenant_id=os.environ["GRAFANA_INSTANCE_ID"],
+    basic_password=os.environ["GLC_TOKEN"],
+)
+```
 
 The endpoint URL follows the pattern:
 ```
