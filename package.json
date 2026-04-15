@@ -1,0 +1,20 @@
+{
+  "name": "sigil-tests",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@grafana/sigil-sdk-js": "file:../../../../private/tmp/sigil-sdk/js",
+    "dotenv": "^17.4.2",
+    "openai": "^6.34.0",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.2"
+  }
+}

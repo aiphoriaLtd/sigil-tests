@@ -1,0 +1,10 @@
+{
+  "status_code": 401,
+  "body": {
+    "extra": null,
+    "message": "Invalid API key",
+    "messageId": "api-key.invalid",
+    "statusCode": 401,
+    "traceID": "7be1363e3657498fcd6734c692b1c18e"
+  }
+}
