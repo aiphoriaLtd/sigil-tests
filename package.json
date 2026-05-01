@@ -2,16 +2,18 @@
   "name": "sigil-tests",
   "version": "1.0.0",
   "type": "module",
-  "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "ts": "npx tsx llm-test.ts"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "description": "",
   "dependencies": {
-    "@grafana/sigil-sdk-js": "file:../../../../private/tmp/sigil-sdk/js",
+    "@grafana/sigil-sdk-js": "file:/tmp/sigil-sdk/js",
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/exporter-metrics-otlp-http": "^0.57.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.57.0",
+    "@opentelemetry/resources": "^1.30.0",
+    "@opentelemetry/sdk-metrics": "^1.30.0",
+    "@opentelemetry/sdk-trace-base": "^1.30.0",
+    "@opentelemetry/sdk-trace-node": "^1.30.0",
     "dotenv": "^17.4.2",
     "openai": "^6.34.0",
     "tsx": "^4.21.0",

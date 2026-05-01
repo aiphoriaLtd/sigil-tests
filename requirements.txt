@@ -1,4 +1,6 @@
 openai
-requests
 python-dotenv
-sigil-sdk
+sigil-sdk>=0.2.0
+opentelemetry-sdk
+opentelemetry-exporter-otlp-proto-http
+certifi

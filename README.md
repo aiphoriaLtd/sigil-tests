@@ -1,83 +1,182 @@
-# Sigil Tests
+# Sigil SDK — Working Examples
 
-Working examples of using [Grafana Sigil](https://github.com/grafana/sigil-sdk) to trace real LLM calls made via Azure OpenAI (Aiphoria endpoints). Each example makes a live LLM call and records the generation — including input/output messages, token usage, and model metadata — to Sigil for observability.
+Reference implementations for instrumenting LLM calls with [Grafana Sigil](https://github.com/grafana/sigil-sdk). These examples make real Azure OpenAI calls and export generation telemetry to Grafana Cloud's AI Observability dashboards.
 
-## Examples
-
-| File | Language | Description |
-|------|----------|-------------|
-| [real-llm-call-test.py](real-llm-call-test.py) | Python | Calls Azure OpenAI and records the generation via the Sigil Python SDK |
-| [ts-auth-example.ts](ts-auth-example.ts) | TypeScript | Same flow using the Sigil JS SDK and OpenAI Node.js SDK |
-
-For full TypeScript setup instructions (building the SDK from source, dependencies, troubleshooting), see [ts-auth-README.md](ts-auth-README.md).
+For the full instrumentation brief from the Grafana team (OTel setup, telemetry fields, multi-agent tracking, SDK API reference), see [`instructions.md`](instructions.md).
 
 ---
 
-## Authentication
+## What Must Be In Place
 
-Both the Sigil export and the Azure OpenAI call require credentials. These are passed as environment variables.
+For the AI Observability dashboard to fully populate (**both** conversations/tokens **and** Total Requests/Latency/Error Rate), you need:
 
-### Sigil / Grafana Cloud credentials
+### 1. SDK Version
 
-Sigil uses **HTTP Basic Auth** to authenticate generation exports. You need two values: your **Grafana Cloud instance ID** (used as the tenant) and a **Grafana Cloud API token** (used as the password).
+- **Python:** `sigil-sdk >= 0.2.0` (install from source: `pip install git+https://github.com/grafana/sigil-sdk.git#subdirectory=python`)
+- **TypeScript:** `@grafana/sigil-sdk-js` (built from source — not on npm yet)
 
-| Variable | What it is | Where to find it |
-|----------|-----------|-----------------|
-| `GRAFANA_INSTANCE_ID` | Your Grafana Cloud stack's numeric instance ID. This is the **tenant ID** used in the `X-Scope-OrgID` header. | In your Grafana Cloud stack: go to **Connections → Sigil plugin → Connection tab**. The value is shown under **Tenant ID Fallback**. You can also find it in the Grafana Cloud Portal under your stack details. |
-| `GLC_TOKEN` | A Grafana Cloud API token (starts with `glc_`). Used as the Basic Auth password alongside the instance ID. | Create one in your Grafana Cloud stack: go to **Administration → Cloud Access Policies** (or via the [Cloud Portal](https://grafana.com/orgs)). Create an access policy scoped to your stack, then generate a token. The token only needs write permissions for AI Observability / Sigil. See [Grafana Cloud Access Policies docs](https://grafana.com/docs/grafana-cloud/account-management/authentication-and-permissions/access-policies/) for details. |
+### 2. OTel Providers Before Sigil Client
 
-**How auth works in the SDK:**
+The Sigil SDK calls `trace.get_tracer()` / `metrics.get_meter()` at construction time. If no providers are registered, metrics silently go to a no-op. **Always** set up `TracerProvider` + `MeterProvider` before creating the Sigil client.
 
-In `basic` mode, the SDK's `AuthConfig` takes two key parameters:
-- **`tenant_id`** — your Grafana Cloud instance ID. The SDK uses this in two ways: as the user component of the HTTP Basic Auth `Authorization` header, and as the `X-Scope-OrgID` header for multi-tenant routing.
-- **`basic_password`** — your Grafana Cloud API token (`GLC_TOKEN`).
+### 3. Two Telemetry Channels (Both Required)
 
-```python
-auth=AuthConfig(
-    mode="basic",
-    tenant_id=os.environ["GRAFANA_INSTANCE_ID"],
-    basic_password=os.environ["GLC_TOKEN"],
-)
-```
+| Channel                                | What it powers                      | How it's configured                                              |
+| -------------------------------------- | ----------------------------------- | ---------------------------------------------------------------- |
+| **Generation export** (Sigil-specific) | Conversations, Total Tokens         | `GenerationExportConfig` with endpoint + auth                    |
+| **OTel traces + metrics**              | Total Requests, Latency, Error Rate | `OTEL_EXPORTER_OTLP_*` env vars (read automatically by OTel SDK) |
 
-The endpoint URL follows the pattern:
-```
-https://sigil-prod-<region>.grafana.net/api/v1/generations:export
-```
+### 4. Short Export Interval (for short-lived scripts)
 
-You can find the correct URL for your stack in the **Sigil plugin → Connection tab** under **Sigil API URL** — just append `/api/v1/generations:export` to it.
+Grafana Cloud Mimir uses `increase()` over cumulative counters. It needs **at least 2 data points** from separate exports to compute a delta. With the default 60-second export interval, a script that finishes in under a minute only exports once at shutdown — so `increase()` returns nothing and "Total Requests" shows 0.
 
-### Azure OpenAI (Aiphoria) credentials
+**Fix:** Set `export_interval_millis=5000` (Python) / `exportIntervalMillis: 5_000` (TypeScript) so metrics export every 5 seconds. Combined with spacing calls 5s apart, a 6-call script produces ~8 exports → Mimir sees proper increments.
 
-These examples use Aiphoria's Azure OpenAI endpoints to make real LLM calls.
+### 5. Multiple Calls Per Process
 
-| Variable | What it is | Where to find it |
-|----------|-----------|-----------------|
-| `AIPHORIA_AZURE_OPENAI_ENDPOINT` | Your Azure OpenAI resource endpoint URL | Azure Portal → your OpenAI resource → **Keys and Endpoint** |
-| `AIPHORIA_AZURE_OPENAI_DEPLOYMENT` | The model deployment name (e.g. `gpt-4.1`) | Azure Portal → your OpenAI resource → **Model deployments** |
-| `AIPHORIA_AZURE_OPENAI_KEY` | API key for the Azure OpenAI resource | Azure Portal → your OpenAI resource → **Keys and Endpoint** (Key 1 or Key 2) |
+The scripts use a **loop** (default 6 calls, configurable via `NUM_CALLS`) so the counter increments `1→2→3→...` and Mimir computes real deltas.
 
-### Setting the variables
+> For long-running services (web servers, agents), neither #4 nor #5 are issues — the counter naturally increments and exports fire many times over the process lifetime.
 
-You can set these in a `.env` file in the project root:
+### 6. Environment Variables
+
+All six of these must be set in `.env`:
 
 ```dotenv
+# Grafana Cloud / Sigil (generation export → conversations + tokens)
 GLC_TOKEN=glc_your_token_here
 GRAFANA_INSTANCE_ID=1234567
+
+# OTel (traces + metrics → Total Requests, Latency, Error Rate)
+OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-<region>.grafana.net/otlp
+OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic <base64(instance_id:cloud_api_token)>
+
+# Azure OpenAI
 AIPHORIA_AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com/
 AIPHORIA_AZURE_OPENAI_DEPLOYMENT=gpt-4.1
 AIPHORIA_AZURE_OPENAI_KEY=your-api-key
 ```
 
-Or export them in your shell profile (e.g. `~/.zshrc`):
+**Where to find these values:**
+
+| Variable                      | Source                                                                                                  |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `GLC_TOKEN`                   | Grafana Cloud → Administration → Cloud Access Policies → create token with AI Observability write scope |
+| `GRAFANA_INSTANCE_ID`         | Grafana Cloud portal → stack details (numeric ID)                                                       |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Grafana Cloud portal → stack Details → OpenTelemetry                                                    |
+| `OTEL_EXPORTER_OTLP_HEADERS`  | `Authorization=Basic <base64(instance_id:cloud_api_token)>`                                             |
+| `AIPHORIA_AZURE_OPENAI_*`     | Azure Portal → your OpenAI resource → Keys and Endpoint / Model deployments                             |
+
+---
+
+## Python Example
+
+### Setup
 
 ```bash
-export AIPHORIA_AZURE_OPENAI_ENDPOINT="https://your-resource.openai.azure.com/"
-export AIPHORIA_AZURE_OPENAI_DEPLOYMENT="gpt-4.1"
-export AIPHORIA_AZURE_OPENAI_KEY="your-api-key"
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+
+# Install sigil-sdk 0.2.0 from source (required):
+pip install git+https://github.com/grafana/sigil-sdk.git#subdirectory=python
 ```
 
-> **Note:** The `.env` file is gitignored — credentials will not be committed.
+### Run
+
+```bash
+# macOS needs SSL cert fix:
+SSL_CERT_FILE="$(.venv/bin/python -m certifi)" .venv/bin/python llm-test-with-prometheus.py
+
+# More calls:
+SSL_CERT_FILE="$(.venv/bin/python -m certifi)" NUM_CALLS=5 .venv/bin/python llm-test-with-prometheus.py
+
+# Or use the convenience script:
+./run-python.sh
+```
+
+---
+
+## TypeScript Example
+
+### Setup
+
+```bash
+# 1. Clone and build the Sigil JS SDK (not on npm yet)
+git clone --depth 1 https://github.com/grafana/sigil-sdk.git /tmp/sigil-sdk
+cd /tmp/sigil-sdk/js
+npm install --legacy-peer-deps
+npx tsc --project tsconfig.build.json
+
+# 2. Install project dependencies
+cd /path/to/sigil-tests
+npm install
+```
+
+### Run
+
+```bash
+npx tsx llm-test.ts
+
+# More calls:
+NUM_CALLS=5 npx tsx llm-test.ts
+
+# Or use the convenience script:
+./run-typescript.sh
+```
+
+---
+
+## Simple Example (Sigil-only, no OTel metrics)
+
+[`real-llm-call-test.py`](real-llm-call-test.py) — minimal script that only does the Sigil generation export (conversations + tokens). Does **not** set up OTel providers, so "Total Requests" won't populate. Useful as a baseline reference.
+
+```bash
+SSL_CERT_FILE="$(.venv/bin/python -m certifi)" .venv/bin/python real-llm-call-test.py
+```
+
+---
+
+## Other Examples
+
+- [`tool-call-test.py`](tool-call-test.py) — LLM calls with function/tool calling
+- [`error-test.py`](error-test.py) — Deliberate error test (records `call_error` field)
+
+---
+
+## How It Works
+
+### Two telemetry paths
+
+```
+Your Script
+    │
+    ├─→ Sigil generation export ──→ sigil-prod-<region>.grafana.net
+    │       (conversations, tokens, messages)
+    │
+    └─→ OTel OTLP export ──→ otlp-gateway-prod-<region>.grafana.net
+            (traces: gen_ai spans)
+            (metrics: gen_ai.client.operation.duration, gen_ai.client.token.usage)
+```
+
+Both feed into the AI Observability dashboard. Without OTel, you get conversations but no request counts/latency. Without Sigil export, you get request metrics but no conversation content.
+
+### Key technical details
+
+- The SDK uses scope `github.com/grafana/sigil/sdks/python` (Python) / `github.com/grafana/sigil/sdks/js` (JS) — dashboards filter by this
+- Provider name must be `azure.ai.openai` (OTel semantic conventions canonical value)
+- `operation_name` must be `"chat"` for chat completions
+- The `OTEL_EXPORTER_OTLP_*` env vars are read automatically by OTel SDK exporters — no extra code needed
+
+---
+
+## Reference
+
+- [Sigil SDK repository](https://github.com/grafana/sigil-sdk) — source for all language SDKs
+- [`instructions.md`](instructions.md) — full instrumentation brief from the Grafana team
+- [Grafana Cloud OTLP docs](https://grafana.com/docs/grafana-cloud/send-data/otlp/send-data-otlp) — how to send OTel data to Cloud
+- [OTel GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/registry/attributes/gen-ai/) — canonical attribute names
 
 ---
 
